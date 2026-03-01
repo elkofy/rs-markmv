@@ -2,6 +2,12 @@
 name = "markmv"
 version = "0.1.0"
 edition = "2021"
+description = "Move markdown files while automatically rewriting all affected links"
+license = "MIT"
+repository = "https://github.com/elkofy/rs-markmv"
+readme = "README.md"
+keywords = ["markdown", "links", "cli", "move", "rewrite"]
+categories = ["command-line-utilities", "text-processing"]
 
 [[bin]]
 name = "markmv"
