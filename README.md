@@ -1,5 +1,7 @@
 # rs-markmv
 
+[![crates.io](https://img.shields.io/crates/v/markmv.svg)](https://crates.io/crates/markmv)
+
 A fast Rust CLI for moving markdown files while automatically rewriting all affected links — a drop-in alternative to the TypeScript [`markmv`](https://www.npmjs.com/package/markmv) tool.
 
 ## Features
