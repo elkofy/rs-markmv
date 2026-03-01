@@ -10,9 +10,7 @@ pub fn normalize_path(path: &Path) -> PathBuf {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
-                // Pop the last real component, if any
                 if !out.pop() {
-                    // If we can't pop (e.g. we're at root), keep the `..`
                     out.push(Component::ParentDir);
                 }
             }
@@ -25,7 +23,6 @@ pub fn normalize_path(path: &Path) -> PathBuf {
 /// Compute a relative path from directory `from_dir` to file `to_file`.
 /// Both paths must be absolute and normalized.
 pub fn make_relative(from_dir: &Path, to_file: &Path) -> PathBuf {
-    // Find the common prefix length
     let from_parts: Vec<_> = from_dir.components().collect();
     let to_parts: Vec<_> = to_file.components().collect();
 
@@ -66,30 +63,20 @@ pub fn resolve_href(href: &str, file_dir: &Path) -> Option<PathBuf> {
 
 /// Rewrite a link that lives inside a file that has moved.
 ///
-/// `href`        — the original href in the source file
-/// `old_src_dir` — the directory the file was in before moving
-/// `new_src_dir` — the directory the file is in after moving
-///
-/// The *target* of the link hasn't changed; only the file containing it moved.
+/// The *target* of the link hasn't changed; only the containing file moved.
+/// Preserves the original `./` style: if the original href didn't start with
+/// `./`, the result won't either.
 pub fn rebase_link(href: &str, old_src_dir: &Path, new_src_dir: &Path) -> String {
     let (path_part, fragment) = split_fragment(href);
 
-    // Resolve target relative to the old location
     let Some(abs_target) = resolve_href(path_part, old_src_dir) else {
         return href.to_owned();
     };
 
-    // Compute the new relative path from the new location
     let new_rel = make_relative(new_src_dir, &abs_target);
-    let mut result = new_rel.to_string_lossy().into_owned();
+    let mut result = new_rel.to_string_lossy().replace('\\', "/");
 
-    // Ensure forward slashes on all platforms
-    result = result.replace('\\', "/");
-
-    // Preserve leading `./` if the original had it (avoids ambiguity)
-    if !result.starts_with("..") && !result.starts_with('/') && !result.starts_with("./") {
-        result = format!("./{result}");
-    }
+    result = apply_dot_slash_style(result, path_part);
 
     if let Some(frag) = fragment {
         result.push_str(frag);
@@ -99,24 +86,35 @@ pub fn rebase_link(href: &str, old_src_dir: &Path, new_src_dir: &Path) -> String
 
 /// Rewrite a link that points to a file that has moved.
 ///
-/// `href`       — the original href in the containing file
-/// `src_dir`    — the directory of the *containing* file (which hasn't moved)
-/// `new_target` — the new absolute, normalized path of the target file
+/// The containing file hasn't moved; only its target did.
+/// Preserves the original `./` style of the href.
 pub fn retarget_link(href: &str, src_dir: &Path, new_target: &Path) -> String {
-    let (_, fragment) = split_fragment(href);
+    let (path_part, fragment) = split_fragment(href);
 
     let new_rel = make_relative(src_dir, new_target);
-    let mut result = new_rel.to_string_lossy().into_owned();
-    result = result.replace('\\', "/");
+    let mut result = new_rel.to_string_lossy().replace('\\', "/");
 
-    if !result.starts_with("..") && !result.starts_with('/') && !result.starts_with("./") {
-        result = format!("./{result}");
-    }
+    result = apply_dot_slash_style(result, path_part);
 
     if let Some(frag) = fragment {
         result.push_str(frag);
     }
     result
+}
+
+/// Apply the `./` prefix convention from `original` to `result`:
+/// - If original started with `./`, ensure result does too (for bare filenames).
+/// - If original didn't start with `./`, don't add it.
+/// - Paths starting with `..` or `/` are never touched.
+fn apply_dot_slash_style(result: String, original: &str) -> String {
+    if result.starts_with("..") || result.starts_with('/') || result.starts_with("./") {
+        return result;
+    }
+    if original.starts_with("./") {
+        format!("./{result}")
+    } else {
+        result
+    }
 }
 
 #[cfg(test)]
@@ -151,9 +149,9 @@ mod tests {
     }
 
     #[test]
-    fn test_rebase_link() {
-        // File moves from /project/src to /project/archive
-        // Link originally pointed to ../docs/guide.md
+    fn test_rebase_link_unchanged() {
+        // File moves from /project/src to /project/archive (siblings of docs/)
+        // Link to ../docs/guide.md resolves to the same relative path from archive/
         let old_dir = Path::new("/project/src");
         let new_dir = Path::new("/project/archive");
         let result = rebase_link("../docs/guide.md", old_dir, new_dir);
@@ -161,20 +159,55 @@ mod tests {
     }
 
     #[test]
-    fn test_retarget_link() {
-        // File at /project/README.md links to docs/old.md
-        // old.md moves to /project/archive/old.md
+    fn test_rebase_link_changes() {
+        // File moves from /project/docs to /project/a/b
+        // Link to ../README.md (= /project/README.md) must now be ../../README.md
+        let old_dir = Path::new("/project/docs");
+        let new_dir = Path::new("/project/a/b");
+        let result = rebase_link("../README.md", old_dir, new_dir);
+        assert_eq!(result, "../../README.md");
+    }
+
+    #[test]
+    fn test_retarget_link_bare_style() {
+        // Original link is bare (no ./); result must also be bare
         let src_dir = Path::new("/project");
         let new_target = Path::new("/project/archive/old.md");
         let result = retarget_link("docs/old.md", src_dir, new_target);
+        assert_eq!(result, "archive/old.md");
+    }
+
+    #[test]
+    fn test_retarget_link_dot_slash_style() {
+        // Original link has ./; result must also have ./
+        let src_dir = Path::new("/project");
+        let new_target = Path::new("/project/archive/old.md");
+        let result = retarget_link("./docs/old.md", src_dir, new_target);
         assert_eq!(result, "./archive/old.md");
     }
 
     #[test]
-    fn test_fragment_preserved() {
+    fn test_fragment_preserved_bare() {
         let src_dir = Path::new("/project");
         let new_target = Path::new("/project/archive/guide.md");
         let result = retarget_link("docs/guide.md#section", src_dir, new_target);
+        assert_eq!(result, "archive/guide.md#section");
+    }
+
+    #[test]
+    fn test_fragment_preserved_dot_slash() {
+        let src_dir = Path::new("/project");
+        let new_target = Path::new("/project/archive/guide.md");
+        let result = retarget_link("./docs/guide.md#section", src_dir, new_target);
         assert_eq!(result, "./archive/guide.md#section");
+    }
+
+    #[test]
+    fn test_parent_relative_untouched() {
+        // Results starting with `..` are never dot-slash prefixed
+        let src_dir = Path::new("/project/docs");
+        let new_target = Path::new("/project/README.md");
+        let result = retarget_link("./README.md", src_dir, new_target);
+        assert_eq!(result, "../README.md");
     }
 }
