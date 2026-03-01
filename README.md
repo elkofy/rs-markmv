@@ -14,6 +14,12 @@ A fast Rust CLI for moving markdown files while automatically rewriting all affe
 ## Installation
 
 ```bash
+cargo install markmv
+```
+
+Or from source:
+
+```bash
 git clone https://github.com/elkofy/rs-markmv
 cd rs-markmv
 cargo install --path .
